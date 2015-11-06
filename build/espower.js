@@ -7,7 +7,7 @@
  *   author: Takuto Wada <takuto.wada@gmail.com>
  *   contributors: James Talmage
  *   homepage: http://github.com/power-assert-js/espower
- *   version: 1.1.0
+ *   version: 1.2.0
  * 
  * amdefine:
  *   license: BSD-3-Clause AND MIT
@@ -26,6 +26,7 @@
  * array-foreach:
  *   license: MIT
  *   author: Takuto Wada <takuto.wada@gmail.com>
+ *   maintainers: twada <takuto.wada@gmail.com>
  *   homepage: https://github.com/twada/array-foreach
  *   version: 1.0.1
  * 
@@ -53,6 +54,7 @@
  * escallmatch:
  *   license: MIT
  *   author: Takuto Wada <takuto.wada@gmail.com>
+ *   maintainers: twada <takuto.wada@gmail.com>
  *   homepage: https://github.com/twada/escallmatch
  *   version: 1.4.2
  * 
@@ -72,6 +74,7 @@
  * espurify:
  *   license: MIT
  *   author: Takuto Wada <takuto.wada@gmail.com>
+ *   maintainers: twada <takuto.wada@gmail.com>
  *   homepage: https://github.com/estools/espurify
  *   version: 1.3.0
  * 
@@ -144,6 +147,7 @@
  * type-name:
  *   license: MIT
  *   author: Takuto Wada <takuto.wada@gmail.com>
+ *   maintainers: twada <takuto.wada@gmail.com>
  *   contributors: azu, Yosuke Furukawa
  *   homepage: https://github.com/twada/type-name
  *   version: 1.1.0
@@ -225,7 +229,7 @@ function astEqual (ast1, ast2) {
     return deepEqual(espurify(ast1), espurify(ast2));
 }
 
-function AssertionVisitor (matcher, assertionPath, options) {
+function AssertionVisitor (matcher, assertionPath, enclosingFunc, options) {
     this.matcher = matcher;
     this.assertionPath = [].concat(assertionPath);
     this.options = options || {};
@@ -234,6 +238,8 @@ function AssertionVisitor (matcher, assertionPath, options) {
     }
     this.currentArgumentPath = null;
     this.argumentModified = false;
+    this.withinGenerator = enclosingFunc && enclosingFunc.generator;
+    this.withinAsync = enclosingFunc && enclosingFunc.async;
 }
 
 AssertionVisitor.prototype.enter = function (currentNode, parentNode) {
@@ -345,8 +351,14 @@ AssertionVisitor.prototype.captureArgument = function (node) {
     var n = newNodeWithLocationCopyOf(node);
     var props = [];
     var newCalleeObject = updateLocRecursively(espurify(this.powerAssertCalleeObject), n, this.options.visitorKeys);
+    if (this.withinAsync) {
+        addLiteralTo(props, n, 'async', true);
+    }
     addLiteralTo(props, n, 'content', this.canonicalCode);
     addLiteralTo(props, n, 'filepath', this.filepath);
+    if (this.withinGenerator) {
+        addLiteralTo(props, n, 'generator', true);
+    }
     addLiteralTo(props, n, 'line', this.lineNum);
     return n({
         type: syntax.CallExpression,
@@ -641,7 +653,8 @@ Instrumentor.prototype.instrument = function (ast) {
                 var candidates = that.matchers.filter(function (matcher) { return matcher.test(currentNode); });
                 if (candidates.length === 1) {
                     // entering target assertion
-                    assertionVisitor = new AssertionVisitor(candidates[0], path, that.options);
+                    var enclosingFunc = findEnclosingFunction(controller.parents());
+                    assertionVisitor = new AssertionVisitor(candidates[0], path, enclosingFunc, that.options);
                     assertionVisitor.enter(currentNode, parentNode);
                     return undefined;
                 }
@@ -685,6 +698,23 @@ Instrumentor.prototype.instrument = function (ast) {
 
 function isCalleeOfParentCallExpression (parentNode, currentKey) {
     return parentNode.type === syntax.CallExpression && currentKey === 'callee';
+}
+
+function isFunction(node) {
+    return [
+          syntax.FunctionDeclaration,
+          syntax.FunctionExpression,
+          syntax.ArrowFunctionExpression
+      ].indexOf(node.type) !== -1;
+}
+
+function findEnclosingFunction(parents) {
+    for (var i = parents.length - 1; i >= 0; i--) {
+        if (isFunction(parents[i])) {
+            return parents[i];
+        }
+    }
+    return null;
 }
 
 function verifyAstPrerequisites (ast, options) {
@@ -732,6 +762,7 @@ module.exports = [
     syntax.TaggedTemplateExpression,
     syntax.SpreadElement,
     syntax.YieldExpression,
+    syntax.AwaitExpression,
     syntax.Property
 ];
 
@@ -755,6 +786,7 @@ var caputuringTargetTypes = [
     syntax.NewExpression,
     syntax.UpdateExpression,
     syntax.YieldExpression,
+    syntax.AwaitExpression,
     syntax.TemplateLiteral,
     syntax.TaggedTemplateExpression
 ];
@@ -771,14 +803,14 @@ function isChildOfTaggedTemplateExpression(parentNode) {
     return parentNode.type === syntax.TaggedTemplateExpression;
 }
 
-function isYieldArgument(parentNode, currentKey) {
-    // capture the yielded result, not the promise
-    return parentNode.type === syntax.YieldExpression && currentKey === 'argument';
+function isYieldOrAwaitArgument(parentNode, currentKey) {
+    // capture the yielded/await result, not the promise
+    return (parentNode.type === syntax.YieldExpression || parentNode.type === syntax.AwaitExpression) && currentKey === 'argument';
 }
 
 module.exports = function toBeCaptured (currentNode, parentNode, currentKey) {
     return isCaputuringTargetType(currentNode) &&
-        !isYieldArgument(parentNode, currentKey) &&
+        !isYieldOrAwaitArgument(parentNode, currentKey) &&
         !isCalleeOfParent(parentNode, currentKey) &&
         !isChildOfTaggedTemplateExpression(parentNode);
 };
