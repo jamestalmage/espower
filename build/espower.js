@@ -7,7 +7,7 @@
  *   author: Takuto Wada <takuto.wada@gmail.com>
  *   contributors: James Talmage
  *   homepage: http://github.com/power-assert-js/espower
- *   version: 1.2.0
+ *   version: 1.1.0
  * 
  * amdefine:
  *   license: BSD-3-Clause AND MIT
